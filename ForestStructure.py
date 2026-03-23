@@ -44,12 +44,20 @@ from tqdm import tqdm
 # Configuration
 # ================================================================
 
-GRID_PATH  = r"D:\Data Finland\Disturbance\TestNK20\GridOutput\grid_16m.gpkg"
+GRID_PATH  = r"D:\Data Finland\Disturbance\TestNK20\GridOutput\grid_16m_from_clip.gpkg"
 GRID_LAYER = "grid_16m"
 OUTPUT_CSV = r"D:\Data Finland\Disturbance\TestNK20\GridOutput\forest_structure_extracted.csv"
 
 YEARS               = [2009, 2011, 2013, 2015, 2017, 2019, 2021, 2023]
 DOMINANCE_THRESHOLD = 0.70
+
+# Grid cell size (metres) -------------------------------------------
+# Controls how many raster pixels are averaged for the CELL value:
+#   GRID_CELL_M=16, raster=16 m  ->  1x1  (single centroid pixel)
+#   GRID_CELL_M=32, raster=16 m  ->  2x2  (4 pixels averaged)
+#   GRID_CELL_M=48, raster=16 m  ->  3x3  (9 pixels averaged)
+# The SURROUNDING window is unaffected by this parameter.
+GRID_CELL_M = 16      # <-- change to 32 or 48 when using a larger grid
 
 # ── Surrounding window definition ────────────────────────────
 # Always expressed as a physical distance in metres.
@@ -67,7 +75,7 @@ RASTER_TEMPLATES = {
     "MeanHeight":            r"D:\Data Finland\Forest Structure\MeanHeight\StandMeanHeight_{year}.tif",
     "VolumePine":            r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumePine_{year}.tif",
     "VolumeBirch_raw":       r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeBirch_{year}.tif",
-    "VolumeOtherBroadleave": r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeOtherBroadleaves_{year}.tif",
+    "VolumeOtherBroadleave": r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeOtherBroadleave_{year}.tif",
     "VolumeSpruce":          r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeSpruce_{year}.tif",
 }
 
@@ -185,6 +193,21 @@ def extract(raster_path: str):
     with np.errstate(invalid="ignore", divide="ignore"):
         surr = np.where(cnt_arr > 0, sum_arr / cnt_arr, np.nan).astype(np.float32)
 
+    # Cell mean: average all raster pixels within the grid cell footprint.
+    # cell_win_size = round(GRID_CELL_M / pixel_m)
+#     GRID_CELL_M=16, pixel=16 m -> 1x1 (centroid pixel only)
+#     GRID_CELL_M=32, pixel=16 m -> 2x2 (4 pixels)
+#     GRID_CELL_M=48, pixel=16 m -> 3x3 (9 pixels)
+    cell_win_size = max(1, round(GRID_CELL_M / pixel_m))
+    if cell_win_size == 1:
+        cell_arr = arr   # no filtering needed, single pixel
+    else:
+        cw2      = float(cell_win_size ** 2)
+        c_sum    = uniform_filter(filled, size=cell_win_size, mode="constant", cval=0.0) * cw2
+        c_cnt    = uniform_filter(valid,  size=cell_win_size, mode="constant", cval=0.0) * cw2
+        with np.errstate(invalid="ignore", divide="ignore"):
+            cell_arr = np.where(c_cnt > 0, c_sum / c_cnt, np.nan).astype(np.float32)
+
     # Row/col indices for this raster's window transform
     local_rows, local_cols = rowcol(win_transform, px_vals, py_vals)
     local_rows = np.asarray(local_rows, dtype=np.int32)
@@ -195,11 +218,11 @@ def extract(raster_path: str):
     r = np.clip(local_rows, 0, w_height - 1)
     c = np.clip(local_cols, 0, w_width  - 1)
 
-    cell_v = arr [r, c].copy()
-    surr_v = surr[r, c].copy()
+    cell_v = cell_arr[r, c].copy()
+    surr_v = surr    [r, c].copy()
     cell_v[~in_b] = np.nan
     surr_v[~in_b] = np.nan
-    return cell_v, surr_v, pixel_m, window_size
+    return cell_v, surr_v, pixel_m, window_size, cell_win_size
 
 # ================================================================
 # Step 3 – Extract all rasters
@@ -225,11 +248,12 @@ with tqdm(total=total_tasks, unit="file") as pbar:
                 data[(var_name, year, "cell")] = _empty()
                 data[(var_name, year, "surr")] = _empty()
             else:
-                cv, sv, pix_m, win_sz = extract(path)
+                cv, sv, pix_m, win_sz, cwin_sz = extract(path)
                 data[(var_name, year, "cell")] = cv
                 data[(var_name, year, "surr")] = sv
                 tqdm.write(f"  {var_name}_{year}: pixel={pix_m:.0f} m  "
-                           f"surrounding window={win_sz}x{win_sz} pixels "
+                           f"cell window={cwin_sz}x{cwin_sz}  "
+                           f"surr window={win_sz}x{win_sz} "
                            f"(covers {(win_sz//2)*pix_m:.0f} m each side)")
             pbar.update(1)
 
@@ -252,30 +276,21 @@ def nan_add(a, b):
 
 def props_and_foresttype(pine, birch, spruce):
     total = pine + birch + spruce
-
     with np.errstate(invalid="ignore", divide="ignore"):
-        pp_ratio = np.where(total > 0, pine   / total, np.nan).astype(np.float32)
-        pb_ratio = np.where(total > 0, birch  / total, np.nan).astype(np.float32)
-        ps_ratio = np.where(total > 0, spruce / total, np.nan).astype(np.float32)
-
-    
+        pp = np.where(total > 0, pine   / total, np.nan).astype(np.float32)
+        pb = np.where(total > 0, birch  / total, np.nan).astype(np.float32)
+        ps = np.where(total > 0, spruce / total, np.nan).astype(np.float32)
     ft = np.where(np.isnan(total), np.nan,
                   np.full(n_cells, 4.0, dtype=np.float32))
-    ft = np.where(pp_ratio > DOMINANCE_THRESHOLD, 2.0, ft)
-    ft = np.where(pb_ratio > DOMINANCE_THRESHOLD, 1.0, ft)
-    ft = np.where(ps_ratio > DOMINANCE_THRESHOLD, 3.0, ft)
-
-  
-    pp = (pp_ratio * 100).astype(np.float32)
-    pb = (pb_ratio * 100).astype(np.float32)
-    ps = (ps_ratio * 100).astype(np.float32)
-
+    ft = np.where(pp > DOMINANCE_THRESHOLD, 2.0, ft)
+    ft = np.where(pb > DOMINANCE_THRESHOLD, 1.0, ft)
+    ft = np.where(ps > DOMINANCE_THRESHOLD, 3.0, ft)
     return pp, pb, ps, ft.astype(np.float32)
 
 for year in YEARS:
     for kind in ("cell", "surr"):
         birch  = nan_add(get("VolumeBirch_raw", year, kind),
-                         get("VolumeOtherBroadleaves", year, kind))
+                         get("VolumeOtherBroadleave", year, kind))
         pine   = get("VolumePine",   year, kind)
         spruce = get("VolumeSpruce", year, kind)
         pp, pb, ps, ft = props_and_foresttype(pine, birch, spruce)
@@ -288,7 +303,7 @@ for year in YEARS:
 for year in YEARS:
     for kind in ("cell", "surr"):
         data.pop(("VolumeBirch_raw",       year, kind), None)
-        data.pop(("VolumeOtherBroadleaves", year, kind), None)
+        data.pop(("VolumeOtherBroadleave", year, kind), None)
 
 print("  Done.")
 
