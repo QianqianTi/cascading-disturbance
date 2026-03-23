@@ -44,8 +44,8 @@ from tqdm import tqdm
 # Configuration
 # ================================================================
 
-GRID_PATH  = r"D:\Data Finland\Disturbance\TestNK20\GridOutput\grid_32m_from_clip.gpkg"
-GRID_LAYER = "grid_32m"
+GRID_PATH  = r"D:\Data Finland\Disturbance\TestNK20\GridOutput\grid_16m_from_clip.gpkg"
+GRID_LAYER = "grid_16m"
 OUTPUT_CSV = r"D:\Data Finland\Disturbance\TestNK20\GridOutput\forest_structure_extracted.csv"
 
 YEARS               = [2009, 2011, 2013, 2015, 2017, 2019, 2021, 2023]
@@ -75,7 +75,7 @@ RASTER_TEMPLATES = {
     "MeanHeight":            r"D:\Data Finland\Forest Structure\MeanHeight\StandMeanHeight_{year}.tif",
     "VolumePine":            r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumePine_{year}.tif",
     "VolumeBirch_raw":       r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeBirch_{year}.tif",
-    "VolumeOtherBroadleaves": r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeOtherBroadleaves_{year}.tif",
+    "VolumeOtherBroadleave": r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeOtherBroadleaves_{year}.tif",
     "VolumeSpruce":          r"D:\Data Finland\Forest Structure\VolumeSpecies\VolumeSpruce_{year}.tif",
 }
 
@@ -290,7 +290,7 @@ def props_and_foresttype(pine, birch, spruce):
 for year in YEARS:
     for kind in ("cell", "surr"):
         birch  = nan_add(get("VolumeBirch_raw", year, kind),
-                         get("VolumeOtherBroadleaves", year, kind))
+                         get("VolumeOtherBroadleave", year, kind))
         pine   = get("VolumePine",   year, kind)
         spruce = get("VolumeSpruce", year, kind)
         pp, pb, ps, ft = props_and_foresttype(pine, birch, spruce)
@@ -303,7 +303,7 @@ for year in YEARS:
 for year in YEARS:
     for kind in ("cell", "surr"):
         data.pop(("VolumeBirch_raw",       year, kind), None)
-        data.pop(("VolumeOtherBroadleaves", year, kind), None)
+        data.pop(("VolumeOtherBroadleave", year, kind), None)
 
 print("  Done.")
 
